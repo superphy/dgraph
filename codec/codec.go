@@ -17,13 +17,10 @@
 package codec
 
 import (
-	"bytes"
-	"encoding/binary"
 	"math"
 	"sort"
 
 	"github.com/dgraph-io/dgraph/protos/pb"
-	"github.com/dgraph-io/dgraph/x"
 )
 
 type seekPos int
@@ -46,18 +43,13 @@ func (e *Encoder) packBlock() {
 		return
 	}
 	block := &pb.UidBlock{Base: e.uids[0]}
-	last := e.uids[0]
 
-	count := 1
-	var out bytes.Buffer
-	var buf [binary.MaxVarintLen64]byte
-	for _, uid := range e.uids[1:] {
-		n := binary.PutUvarint(buf[:], uid-last)
-		x.Check2(out.Write(buf[:n]))
-		last = uid
-		count++
+	tmpUids := make([]uint32, len(e.uids))
+	tmpUids[0] = uint32(0)
+	for i := 1; i < len(e.uids); i++ {
+		tmpUids[i] = uint32(e.uids[i] - e.uids[i-1])
 	}
-	block.Deltas = out.Bytes()
+	block.Deltas = encodeGroupVarint(tmpUids)
 	e.pack.Blocks = append(e.pack.Blocks, block)
 }
 
@@ -96,17 +88,17 @@ func (d *Decoder) unpackBlock() []uint64 {
 	block := d.Pack.Blocks[d.blockIdx]
 
 	last := block.Base
-	d.uids = append(d.uids, last)
+	// d.uids = append(d.uids, last)
 
-	// Read back the encoded varints.
-	var offset int
-	for offset < len(block.Deltas) {
-		delta, n := binary.Uvarint(block.Deltas[offset:])
-		x.AssertTrue(n > 0)
-		offset += n
-		uid := last + delta
-		d.uids = append(d.uids, uid)
-		last = uid
+	src := block.Deltas
+	for len(src) >= 17 {
+		var dst [4]uint32
+		Decode4(dst[:], src)
+		for i := 0; i < 4; i++ {
+			d.uids = append(d.uids, last+uint64(dst[i]))
+			last += uint64(dst[i])
+		}
+		src = src[BytesUsed[src[0]]:]
 	}
 	return d.uids
 }
