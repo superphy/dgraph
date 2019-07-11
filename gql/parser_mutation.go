@@ -19,8 +19,42 @@ package gql
 import (
 	"github.com/dgraph-io/dgo/protos/api"
 	"github.com/dgraph-io/dgraph/lex"
+
 	"github.com/pkg/errors"
 )
+
+// ParseIfDirective parses the if directive into a FilterTree
+func ParseIfDirective(cond string) (*FilterTree, error) {
+	if cond == "" {
+		return nil, nil
+	}
+
+	lexer := lex.NewLexer(cond)
+	lexer.Run(lexIfDirective)
+	if err := lexer.ValidateResult(); err != nil {
+		return nil, err
+	}
+
+	// ===>@<=== if(...)
+	it := lexer.NewIterator()
+	if !it.Next() {
+		return nil, errors.Errorf("Empty if directive")
+	}
+	if item := it.Item(); item.Typ != itemAt {
+		return nil, errors.Errorf("Expected @, found [%v]", item.Val)
+	}
+
+	// @ ===>if<=== (...)
+	if !it.Next() {
+		return nil, errors.Errorf("Invalid if directive")
+	}
+	if item := it.Item(); item.Typ != itemName || item.Val != "if" {
+		return nil, errors.Errorf("Expected if, found [%v]", item.Val)
+	}
+
+	// @if ===>(...)<===
+	return parseFilter(it)
+}
 
 // ParseMutation parses a block into a mutation. Returns an object with a mutation or
 // an upsert block with mutation, otherwise returns nil with an error.
@@ -39,11 +73,11 @@ func ParseMutation(mutation string) (mu *api.Mutation, err error) {
 	item := it.Item()
 	switch item.Typ {
 	case itemUpsertBlock:
-		if mu, err = ParseUpsertBlock(it); err != nil {
+		if mu, err = parseUpsertBlock(it); err != nil {
 			return nil, err
 		}
 	case itemLeftCurl:
-		if mu, err = ParseMutationBlock(it); err != nil {
+		if mu, err = parseMutationBlock(it); err != nil {
 			return nil, err
 		}
 	default:
@@ -58,10 +92,11 @@ func ParseMutation(mutation string) (mu *api.Mutation, err error) {
 	return mu, nil
 }
 
-// ParseUpsertBlock parses the upsert block
-func ParseUpsertBlock(it *lex.ItemIterator) (*api.Mutation, error) {
+// parseUpsertBlock parses the upsert block
+func parseUpsertBlock(it *lex.ItemIterator) (*api.Mutation, error) {
 	var mu *api.Mutation
 	var queryText string
+	var condText string
 	var queryFound bool
 
 	// ===>upsert<=== {...}
@@ -86,6 +121,7 @@ func ParseUpsertBlock(it *lex.ItemIterator) (*api.Mutation, error) {
 				return nil, errors.Errorf("Query op not found in upsert block")
 			} else {
 				mu.Query = queryText
+				mu.Cond = condText
 				return mu, nil
 			}
 
@@ -109,8 +145,19 @@ func ParseUpsertBlock(it *lex.ItemIterator) (*api.Mutation, error) {
 			if !it.Next() {
 				return nil, errors.Errorf("Unexpected end of upsert block")
 			}
+
+			// upsert { mutation ===>@if(...)<=== {....} query{...}}
+			item = it.Item()
+			if item.Typ == itemUpsertBlockOpContent {
+				condText = item.Val
+				if !it.Next() {
+					return nil, errors.Errorf("Unexpected end of upsert block")
+				}
+			}
+
+			// upsert @if(...) ===>{<=== ....}
 			var err error
-			if mu, err = ParseMutationBlock(it); err != nil {
+			if mu, err = parseMutationBlock(it); err != nil {
 				return nil, err
 			}
 
@@ -133,8 +180,8 @@ func ParseUpsertBlock(it *lex.ItemIterator) (*api.Mutation, error) {
 	return nil, errors.Errorf("Invalid upsert block")
 }
 
-// ParseMutationBlock parses the mutation block
-func ParseMutationBlock(it *lex.ItemIterator) (*api.Mutation, error) {
+// parseMutationBlock parses the mutation block
+func parseMutationBlock(it *lex.ItemIterator) (*api.Mutation, error) {
 	var mu api.Mutation
 
 	item := it.Item()

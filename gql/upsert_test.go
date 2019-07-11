@@ -312,3 +312,233 @@ func TestUpsertWithFilter(t *testing.T) {
 	_, err := ParseMutation(query)
 	require.Nil(t, err)
 }
+
+func TestConditionalUpsertWithNewlines(t *testing.T) {
+	query := `upsert {
+  mutation @if(eq(count(m), 1)
+               AND
+               gt(count(f), 0)) {
+    set {
+      uid(m) <age> "45" .
+      uid(f) <age> "45" .
+    }
+  }
+
+  query {
+    me(func: eq(age, 34)) @filter(ge(name, "user")) {
+      uid
+      friend {
+        uid
+        age
+      }
+    }
+  }
+}
+`
+	mu, err := ParseMutation(query)
+	require.Nil(t, err)
+	_, err = ParseIfDirective(mu.Cond)
+	require.Nil(t, err)
+}
+
+func TestConditionalUpsertFuncTree(t *testing.T) {
+	query := `upsert {
+  mutation @if( ( eq(count(m), 1)
+                  OR
+                  lt(90, count(h)))
+                AND
+                gt(count(f), 0)) {
+    set {
+      uid(m) <age> "45" .
+      uid(f) <age> "45" .
+    }
+  }
+
+  query {
+    me(func: eq(age, 34)) @filter(ge(name, "user")) {
+      uid
+      friend {
+        uid
+        age
+      }
+    }
+  }
+}
+`
+	mu, err := ParseMutation(query)
+	require.Nil(t, err)
+	_, err = ParseIfDirective(mu.Cond)
+	require.Nil(t, err)
+}
+
+func TestConditionalUpsertMultipleFuncArg(t *testing.T) {
+	query := `upsert {
+  mutation @if( ( eq(count(m), count(t))
+                  OR
+                  lt(90, count(h)))
+                AND
+                gt(count(f), 0)) {
+    set {
+      uid(m) <age> "45" .
+      uid(f) <age> "45" .
+    }
+  }
+
+  query {
+    me(func: eq(age, 34)) @filter(ge(name, "user")) {
+      uid
+      friend {
+        uid
+        age
+      }
+    }
+  }
+}
+`
+	mu, err := ParseMutation(query)
+	require.Nil(t, err)
+	_, err = ParseIfDirective(mu.Cond)
+	require.Contains(t, err.Error(), "Multiple functions as arguments not allowed")
+}
+
+func TestConditionalUpsertErrMissingRightRound(t *testing.T) {
+	query := `upsert {
+  mutation @if(eq(len(m, 1)
+               AND
+               gt(len(f), 0)) {
+    set {
+      uid(m) <age> "45" .
+      uid(f) <age> "45" .
+    }
+  }
+
+  query {
+    me(func: eq(age, 34)) @filter(ge(name, "user")) {
+      uid
+      friend {
+        uid
+        age
+      }
+    }
+  }
+}
+`
+	_, err := ParseMutation(query)
+	require.Contains(t, err.Error(), "Invalid if directive")
+}
+
+func TestConditionalUpsertErrUnclosed(t *testing.T) {
+	query := `upsert {
+  mutation @if(eq(len(m), 1) AND gt(len(f), 0))`
+	_, err := ParseMutation(query)
+	require.Contains(t, err.Error(), "Unclosed mutation action")
+}
+
+func TestConditionalUpsertErrInvalidIf(t *testing.T) {
+	query := `upsert {
+  mutation @if`
+	_, err := ParseMutation(query)
+	require.Contains(t, err.Error(), "Invalid if directive")
+}
+
+func TestConditionalUpsertErrWrongIf(t *testing.T) {
+	query := `upsert {
+  mutation @fi( ( eq(len(m), 1)
+                  OR
+                  lt(len(h), 90))
+                AND
+                gt(len(f), 0)) {
+    set {
+      uid(m) <age> "45" .
+      uid(f) <age> "45" .
+    }
+  }
+
+  query {
+    me(func: eq(age, 34)) @filter(ge(name, "user")) {
+      uid
+      friend {
+        uid
+        age
+      }
+    }
+  }
+}
+`
+	_, err := ParseMutation(query)
+	require.Contains(t, err.Error(), "Expected @if, found [@fi]")
+}
+
+func TestIfDirectiveNoIf(t *testing.T) {
+	ft, err := ParseIfDirective("")
+	require.Nil(t, ft)
+	require.Nil(t, err)
+}
+
+func TestIfDirectiveWithComment(t *testing.T) {
+	cond := ` @if( ( eq(count(m), 1)
+  # This is a comment
+                  OR
+                  lt(90, count(h)))
+                AND
+                gt(count(f), 0))`
+	_, err := ParseIfDirective(cond)
+	require.Nil(t, err)
+}
+
+func TestIfDirectiveWithSameLineComment(t *testing.T) {
+	cond := ` @if( ( eq(count(m), 1)
+                  OR # This is another comment
+                  lt(90, count(h)) )
+                AND
+                gt(count(f), 0))`
+	_, err := ParseIfDirective(cond)
+	require.Nil(t, err)
+}
+
+func TestIfDirectiveWithAfterIfComment(t *testing.T) {
+	cond := ` @if # This comment is okay too
+                ((eq(count(m), 1)
+                  OR # This is another comment
+                  lt(90, count(h)) )
+                AND
+                gt(count(f), 0)) `
+	_, err := ParseIfDirective(cond)
+	require.Nil(t, err)
+}
+
+func TestIfDirectiveErrMissingAt(t *testing.T) {
+	cond := ` if( ( eq(count(m), 1)
+                  OR
+                  lt(90, count(h)))
+                AND
+                gt(count(f), 0))`
+	_, err := ParseIfDirective(cond)
+	require.Contains(t, err.Error(), "Unrecognized character in lexText: U+0069 'i'")
+}
+
+func TestIfDirectiveErrWhiteSpace(t *testing.T) {
+	cond := ` `
+	_, err := ParseIfDirective(cond)
+	require.Contains(t, err.Error(), "Expected @, found []")
+}
+
+func TestIfDirectiveNoParseErr(t *testing.T) {
+	cond := ` @if( ( eq(count(m), 1)
+                  OR
+                  lt(90, count(h)))
+                AND
+                gt(count(h), 0)) @if()`
+	_, err := ParseIfDirective(cond)
+	require.Nil(t, err)
+}
+
+func TestIfDirectiveErrMissingRightRound(t *testing.T) {
+	cond := `@if( ( eq(count(m), 1)
+                  OR
+                  lt(90, count(h)))
+                AND
+                gt(count(h), 0)`
+	_, err := ParseIfDirective(cond)
+	require.Contains(t, err.Error(), "Unclosed Brackets")
+}

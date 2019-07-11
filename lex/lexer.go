@@ -172,6 +172,7 @@ type Lexer struct {
 	items      []Item  // channel of scanned items.
 	Depth      int     // nesting of {}
 	BlockDepth int     // nesting of blocks (e.g. mutation block inside upsert block)
+	WhetherIf  bool    // Used to figure out where to return go from lexFuncOrArg
 	ArgDepth   int     // nesting of ()
 	Mode       StateFn // Default state to go back to after reading a token.
 	Line       int     // the current line number corresponding to Start

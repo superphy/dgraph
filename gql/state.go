@@ -65,6 +65,34 @@ const (
 	itemMathOp
 )
 
+// lexIfDirective lexes the @if directive in a mutation block
+func lexIfDirective(l *lex.Lexer) lex.StateFn {
+	l.Mode = lexIfDirective
+	for {
+		switch r := l.Next(); {
+		case r == lex.EOF:
+			l.Emit(lex.ItemEOF)
+			return nil
+		case isSpace(r) || lex.IsEndOfLine(r):
+			l.Ignore()
+		case r == '#':
+			return lexComment
+		case r == leftRound:
+			l.Emit(itemLeftRound)
+			l.AcceptRun(isSpace)
+			l.Ignore()
+			l.ArgDepth++
+			l.WhetherIf = true
+			return lexFuncOrArg
+		case r == at:
+			l.Emit(itemAt)
+			return lexDirectiveOrLangList
+		default:
+			return l.Errorf("Unrecognized character in lexText: %#U", r)
+		}
+	}
+}
+
 // lexIdentifyBlock identifies whether it is an upsert block
 // If the block begins with "{" => mutation block
 // Else if the block begins with "upsert" => upsert block
@@ -93,11 +121,7 @@ func lexIdentifyBlock(l *lex.Lexer) lex.StateFn {
 func lexNameBlock(l *lex.Lexer) lex.StateFn {
 	for {
 		// The caller already checked isNameBegin, and absorbed one rune.
-		r := l.Next()
-		if isNameSuffix(r) {
-			continue
-		}
-		l.Backup()
+		l.AcceptRun(isNameSuffix)
 		switch word := l.Input[l.Start:l.Pos]; word {
 		case "upsert":
 			l.Emit(itemUpsertBlock)
@@ -140,11 +164,7 @@ func lexUpsertBlock(l *lex.Lexer) lex.StateFn {
 func lexNameUpsertOp(l *lex.Lexer) lex.StateFn {
 	for {
 		// The caller already checked isNameBegin, and absorbed one rune.
-		r := l.Next()
-		if isNameSuffix(r) {
-			continue
-		}
-		l.Backup()
+		l.AcceptRun(isNameSuffix)
 		word := l.Input[l.Start:l.Pos]
 		switch word {
 		case "query":
@@ -187,10 +207,48 @@ func lexBlockContent(l *lex.Lexer) lex.StateFn {
 	}
 }
 
+// lexIfContent lexes the whole of @if directive in a mutation block
+func lexIfContent(l *lex.Lexer) lex.StateFn {
+	if r := l.Next(); r != at {
+		return l.Errorf("Expected [@], found; [%#U]", r)
+	}
+
+	l.AcceptRun(isNameSuffix)
+	word := l.Input[l.Start:l.Pos]
+	if word != "@if" {
+		return l.Errorf("Expected @if, found [%v]", word)
+	}
+
+	depth := 0
+	for {
+		switch l.Next() {
+		case lex.EOF:
+			return l.Errorf("Invalid if directive")
+		case quote:
+			if err := l.LexQuotedString(); err != nil {
+				return l.Errorf(err.Error())
+			}
+		case leftRound:
+			depth++
+		case rightRound:
+			depth--
+			if depth < 0 {
+				return l.Errorf("Unopened ) found in if directive")
+			} else if depth == 0 {
+				l.Emit(itemUpsertBlockOpContent)
+				return lexInsideMutation
+			}
+		}
+	}
+}
+
 func lexInsideMutation(l *lex.Lexer) lex.StateFn {
 	l.Mode = lexInsideMutation
 	for {
 		switch r := l.Next(); {
+		case r == at:
+			l.Backup()
+			return lexIfContent
 		case r == rightCurl:
 			l.Depth--
 			l.Emit(itemRightCurl)
@@ -304,6 +362,13 @@ func lexFuncOrArg(l *lex.Lexer) lex.StateFn {
 				return l.Errorf("Empty Argument")
 			}
 			if l.ArgDepth == 0 {
+				// TODO(Aman): We should make l.Mode a stack instead
+				// and avoid such conditions as below.
+				if l.WhetherIf {
+					l.WhetherIf = false
+					return lexIfDirective
+				}
+
 				return lexQuery // Filter directive is done.
 			}
 		case r == lex.EOF:
@@ -586,7 +651,7 @@ func lexOperationType(l *lex.Lexer) lex.StateFn {
 		l.Emit(itemOpType)
 		return lexInsideSchema
 	} else {
-		l.Errorf("Invalid operation type: %s", word)
+		return l.Errorf("Invalid operation type: %s", word)
 	}
 
 	return lexQuery

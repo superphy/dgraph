@@ -34,6 +34,9 @@ var (
 type Mutation struct {
 	Set []*api.NQuad
 	Del []*api.NQuad
+
+	// CondTree stores the condition of mutation (@if directive)
+	CondTree *FilterTree
 }
 
 // ParseUid parses the given string into an UID. This method returns with an error
