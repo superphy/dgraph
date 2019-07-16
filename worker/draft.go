@@ -317,7 +317,7 @@ func (n *node) applyMutations(ctx context.Context, proposal *pb.Proposal) (rerr 
 	return nil
 }
 
-func (n *node) applyCommitted(proposal *pb.Proposal) error {
+func (n *node) applyCommitted(proposal *pb.Proposal, i int, proposals []*pb.Proposal) error {
 	ctx := n.Ctx(proposal.Key)
 	span := otrace.FromContext(ctx)
 	span.Annotatef(nil, "node.applyCommitted Node id: %d. Group id: %d. Got proposal key: %s",
@@ -426,13 +426,25 @@ func (n *node) processApplyCh() {
 
 	// This function must be run serially.
 	handle := func(proposals []*pb.Proposal) {
-		var totalSize int64
 		for _, proposal := range proposals {
+			ctx := n.Ctx(proposal.Key)
+			span := otrace.FromContext(ctx)
+			span.Annotatef(nil, "handling proposals of length %d",
+				len(proposals))
+		}
+
+		var totalSize int64
+		for i, proposal := range proposals {
+			for _, proposal := range proposals {
+				ctx := n.Ctx(proposal.Key)
+				span := otrace.FromContext(ctx)
+				span.Annotatef(nil, "handling proposals index %d", i)
+			}
+
 			// We use the size as a double check to ensure that we're
 			// working with the same proposal as before.
 			psz := proposal.Size()
 			totalSize += int64(psz)
-
 			var perr error
 			p, ok := previous[proposal.Key]
 			if ok && p.err == nil && p.size == psz {
@@ -443,7 +455,8 @@ func (n *node) processApplyCh() {
 
 			} else {
 				start := time.Now()
-				perr = n.applyCommitted(proposal)
+
+				//perr = n.applyCommitted(proposal, i, proposals)
 				if len(proposal.Key) > 0 {
 					p := &P{err: perr, size: psz, seen: time.Now()}
 					previous[proposal.Key] = p
