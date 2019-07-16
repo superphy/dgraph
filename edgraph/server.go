@@ -439,13 +439,28 @@ func (s *Server) doMutate(ctx context.Context, mu *api.Mutation, authorize bool)
 	resp = &api.Assigned{}
 
 	start := time.Now()
+	var processStart time.Time
+	var authorizationTime time.Duration
+	var upsertTime time.Duration
+	var uidTime time.Duration
+	var edgeTime time.Duration
+	var applyTime time.Duration
+	var commitTime time.Duration
 	defer func() {
 		totalTime := time.Since(start)
-		processingTime := totalTime - parsingTime
+		processingTime := time.Since(processStart)
 		resp.Latency = &api.Latency{
 			ParsingNs:    uint64(parsingTime.Nanoseconds()),
 			ProcessingNs: uint64(processingTime.Nanoseconds()),
 		}
+		ostats.Record(ctx, x.MutationLatencyTotal.M(x.Millis(totalTime)))
+		ostats.Record(ctx, x.MutationLatencyProcess.M(x.Millis(processingTime)))
+		ostats.Record(ctx, x.MutationLatencyAuth.M(x.Millis(authorizationTime)))
+		ostats.Record(ctx, x.MutationLatencyUpsert.M(x.Millis(upsertTime)))
+		ostats.Record(ctx, x.MutationLatencyUid.M(x.Millis(uidTime)))
+		ostats.Record(ctx, x.MutationLatencyEdges.M(x.Millis(edgeTime)))
+		ostats.Record(ctx, x.MutationLatencyApply.M(x.Millis(applyTime)))
+		ostats.Record(ctx, x.MutationLatencyCommit.M(x.Millis(commitTime)))
 	}()
 
 	ctx, span := otrace.StartSpan(ctx, methodMutate)
@@ -481,12 +496,15 @@ func (s *Server) doMutate(ctx context.Context, mu *api.Mutation, authorize bool)
 		return resp, err
 	}
 	parsingTime += time.Since(startParsingTime)
+	processStart = time.Now()
 
+	// step 1 authorization
 	if authorize {
 		if err := authorizeMutation(ctx, gmu); err != nil {
 			return resp, err
 		}
 	}
+	authorizationTime = time.Since(processStart)
 
 	if len(gmu.Set) == 0 && len(gmu.Del) == 0 {
 		span.Annotate(nil, "Empty mutation")
@@ -498,25 +516,35 @@ func (s *Server) doMutate(ctx context.Context, mu *api.Mutation, authorize bool)
 	}
 	annotateStartTs(span, mu.StartTs)
 
+	// step 2: do query in upsert
 	l, err := doQueryInUpsert(ctx, mu, gmu)
 	if err != nil {
 		return resp, err
 	}
 	parsingTime += l.Parsing
+	upsertTime = time.Since(processStart)
 
+	// step 3: assign uids
 	newUids, err := query.AssignUids(ctx, gmu.Set)
 	if err != nil {
 		return resp, err
 	}
 	resp.Uids = query.UidsToHex(query.StripBlankNode(newUids))
+	uidTime = time.Since(processStart)
+
+	// step 4: convert to edges
 	edges, err := query.ToDirectedEdges(gmu, newUids)
 	if err != nil {
 		return resp, err
 	}
+	edgeTime = time.Since(processStart)
 
 	m := &pb.Mutations{Edges: edges, StartTs: mu.StartTs}
 	span.Annotatef(nil, "Applying mutations: %+v", m)
+
+	// step 5: apply mutations
 	resp.Context, err = query.ApplyMutations(ctx, m)
+	applyTime = time.Since(processStart)
 	span.Annotatef(nil, "Txn Context: %+v. Err=%v", resp.Context, err)
 	if !mu.CommitNow {
 		if err == y.ErrConflict {
@@ -536,13 +564,14 @@ func (s *Server) doMutate(ctx context.Context, mu *api.Mutation, authorize bool)
 		}
 
 		resp.Context.Aborted = true
+		// step 6: commit over network
 		_, _ = worker.CommitOverNetwork(ctx, resp.Context)
-
 		if err == y.ErrConflict {
 			// We have already aborted the transaction, so the error message should reflect that.
 			return resp, y.ErrAborted
 		}
 
+		// step 7 return the result
 		return resp, err
 	}
 
@@ -550,6 +579,7 @@ func (s *Server) doMutate(ctx context.Context, mu *api.Mutation, authorize bool)
 	ctxn := resp.Context
 	// zero would assign the CommitTs
 	cts, err := worker.CommitOverNetwork(ctx, ctxn)
+	commitTime = time.Since(processStart)
 	span.Annotatef(nil, "Status of commit at ts: %d: %v", ctxn.StartTs, err)
 	if err != nil {
 		if err == y.ErrAborted {

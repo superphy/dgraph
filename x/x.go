@@ -675,3 +675,10 @@ func GetPassAndLogin(dg *dgo.Dgraph, opt *CredOpt) error {
 	// update the context so that it has the admin jwt token
 	return nil
 }
+
+// Millis returns the duration as a floating point number of miliseconds.
+func Millis(d time.Duration) float64 {
+	sec := d / time.Millisecond
+	nsec := d % time.Millisecond
+	return float64(sec) + float64(nsec)/1e9
+}

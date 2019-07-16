@@ -856,6 +856,7 @@ func (n *node) Run() {
 
 			// Now schedule or apply committed entries.
 			var proposals []*pb.Proposal
+			var proposalCtxes []*conn.ProposalCtx
 			for _, entry := range rd.CommittedEntries {
 				// Need applied watermarks for schema mutation also for read linearazibility
 				// Applied watermarks needs to be emitted as soon as possible sequentially.
@@ -885,9 +886,11 @@ func (n *node) Run() {
 						x.Fatalf("Unable to unmarshal proposal: %v %q\n", err, entry.Data)
 					}
 					if pctx := n.Proposals.Get(proposal.Key); pctx != nil {
+						proposalCtxes = append(proposalCtxes, pctx)
 						atomic.AddUint32(&pctx.Found, 1)
 						if span := otrace.FromContext(pctx.Ctx); span != nil {
-							span.Annotate(nil, "Proposal found in CommittedEntries")
+							span.Annotatef(nil, "Proposal found in CommittedEntries of length %d",
+								len(rd.CommittedEntries))
 						}
 					}
 					proposal.Index = entry.Index
@@ -907,6 +910,13 @@ func (n *node) Run() {
 				if sz := atomic.AddInt64(&n.pendingSize, pendingSize); sz > 2*maxPendingSize {
 					glog.Warningf("Inflight proposal size: %d. There would be some throttling.", sz)
 				}
+
+				for _, pctx := range proposalCtxes {
+					if span := otrace.FromContext(pctx.Ctx); span != nil {
+						span.Annotate(nil, "sending proposal to applyCh")
+					}
+				}
+				ostats.Record(context.Background(), x.ApplyChannelLen.M(int64(len(n.applyCh))))
 				n.applyCh <- proposals
 			}
 

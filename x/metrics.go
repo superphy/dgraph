@@ -74,6 +74,8 @@ var (
 	// ActiveMutations is the current number of active mutations.
 	ActiveMutations = stats.Int64("active_mutations_total",
 		"Number of active mutations", stats.UnitDimensionless)
+	ApplyChannelLen = stats.Int64("apply_channel_length",
+		"Number of proposals in the apply channel", stats.UnitDimensionless)
 	// AlphaHealth status records the current health of the alphas.
 	AlphaHealth = stats.Int64("alpha_health_status",
 		"Status of the alphas", stats.UnitDimensionless)
@@ -83,7 +85,26 @@ var (
 	// MaxAssignedTs records the latest max assigned timestamp.
 	MaxAssignedTs = stats.Int64("max_assigned_ts",
 		"Latest max assigned timestamp", stats.UnitDimensionless)
+	MutationLatencyProcess = stats.Float64("mutation_latency_process",
+		"Mutation latency for processing in ms", stats.UnitMilliseconds)
+	MutationLatencyTotal = stats.Float64("mutation_latency_total",
+		"Mutation latency total in ms", stats.UnitMilliseconds)
+	MutationLatencyAuth = stats.Float64("mutation_latency_auth",
+		"Mutation latency for auth in ms", stats.UnitMilliseconds)
+	MutationLatencyUpsert = stats.Float64("mutation_latency_upsert",
+		"Mutation latency for upsert in ms", stats.UnitMilliseconds)
+	MutationLatencyUid = stats.Float64("mutation_latency_uid",
+		"Mutation latency for assign uids in ms", stats.UnitMilliseconds)
+	MutationLatencyEdges = stats.Float64("mutation_latency_edges",
+		"Mutation latency for assign uids in ms", stats.UnitMilliseconds)
+	MutationLatencyApply = stats.Float64("mutation_latency_apply",
+		"Mutation latency for assign uids in ms", stats.UnitMilliseconds)
+	MutationLatencyCommit = stats.Float64("mutation_latency_commit",
+		"Mutation latency for assign uids in ms", stats.UnitMilliseconds)
 
+	latencyMetrics = []*stats.Float64Measure{LatencyMs, MutationLatencyTotal,
+		MutationLatencyProcess, MutationLatencyAuth, MutationLatencyUpsert, MutationLatencyUid,
+		MutationLatencyEdges, MutationLatencyApply, MutationLatencyCommit}
 	// Conf holds the metrics config.
 	// TODO: Request statistics, latencies, 500, timeouts
 	Conf *expvar.Map
@@ -105,20 +126,14 @@ var (
 	defaultLatencyMsDistribution = view.Distribution(
 		0, 0.01, 0.05, 0.1, 0.3, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 8, 10, 13, 16,
 		20, 25, 30, 40, 50, 65, 80, 100, 130, 160, 200, 250, 300, 400, 500,
-		650, 800, 1000, 2000, 5000, 10000, 20000, 50000, 100000)
+		650, 800, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 15000, 20000, 50000,
+		100000)
 
 	allTagKeys = []tag.Key{
 		KeyStatus, KeyMethod,
 	}
 
 	allViews = []*view.View{
-		{
-			Name:        LatencyMs.Name(),
-			Measure:     LatencyMs,
-			Description: LatencyMs.Description(),
-			Aggregation: defaultLatencyMsDistribution,
-			TagKeys:     allTagKeys,
-		},
 		{
 			Name:        NumQueries.Name(),
 			Measure:     NumQueries,
@@ -160,6 +175,13 @@ var (
 			Name:        PendingProposals.Name(),
 			Measure:     PendingProposals,
 			Description: PendingProposals.Description(),
+			Aggregation: view.LastValue(),
+			TagKeys:     allTagKeys,
+		},
+		{
+			Name:        ApplyChannelLen.Name(),
+			Measure:     ApplyChannelLen,
+			Description: ApplyChannelLen.Description(),
 			Aggregation: view.LastValue(),
 			TagKeys:     allTagKeys,
 		},
@@ -228,6 +250,15 @@ func init() {
 		}
 	}()
 
+	for _, latencyMeasure := range latencyMetrics {
+		allViews = append(allViews, &view.View{
+			Name:        latencyMeasure.Name(),
+			Measure:     latencyMeasure,
+			Description: latencyMeasure.Description(),
+			Aggregation: defaultLatencyMsDistribution,
+			TagKeys:     allTagKeys,
+		})
+	}
 	CheckfNoTrace(view.Register(allViews...))
 
 	pe, err := prometheus.NewExporter(prometheus.Options{

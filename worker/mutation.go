@@ -600,6 +600,11 @@ func (w *grpcWorker) proposeAndWait(ctx context.Context, txnCtx *api.TxnContext,
 		}
 	}
 
+	span := otrace.FromContext(ctx)
+	if span != nil {
+		span.Annotate(nil, "Waiting for Ts")
+	}
+
 	// We should wait to ensure that we have seen all the updates until the StartTs of this mutation
 	// transaction. Otherwise, when we read the posting list value for calculating the indices, we
 	// might be wrong because we might be missing out a commit which has updated the value. This
@@ -610,6 +615,9 @@ func (w *grpcWorker) proposeAndWait(ctx context.Context, txnCtx *api.TxnContext,
 	}
 
 	node := groups().Node
+	if span != nil {
+		span.Annotate(nil, "entering proposeAndWait")
+	}
 	err := node.proposeAndWait(ctx, &pb.Proposal{Mutations: m})
 	fillTxnContext(txnCtx, m.StartTs)
 	return err
