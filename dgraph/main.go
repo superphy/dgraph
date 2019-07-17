@@ -20,11 +20,12 @@ import (
 	"math/rand"
 	"runtime"
 	"time"
-
+	"runtime/debug"
 	"github.com/dgraph-io/dgraph/dgraph/cmd"
 )
 
 func main() {
+	debug.SetMaxThreads(30000)
 	rand.Seed(time.Now().UnixNano())
 	// Setting a higher number here allows more disk I/O calls to be scheduled, hence considerably
 	// improving throughput. The extra CPU overhead is almost negligible in comparison. The
