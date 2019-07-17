@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"fmt"
 	"io/ioutil"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ func TestSchemaString(t *testing.T) {
 		GenerateCompleteSchema(schema)
 
 		newSchemaStr := Stringify(schema)
-		// fmt.Println(newSchemaStr)
+		fmt.Println(newSchemaStr)
 		newDoc, gqlerr := parser.ParseSchema(&ast.Source{Input: newSchemaStr})
 		if gqlerr != nil {
 			t.Errorf("Unable to parse new schema "+gqlerr.Message+" %+v", gqlerr.Locations[0])
@@ -90,7 +91,7 @@ func TestSchemaString(t *testing.T) {
 }
 
 func TestInvalidSchemas(t *testing.T) {
-	numTests := 3
+	numTests := 7
 
 	for i := 0; i < numTests; i++ {
 		fileName := "../testdata/invalidschema" + strconv.Itoa(i+1) + ".txt" // run from pwd
@@ -107,16 +108,7 @@ func TestInvalidSchemas(t *testing.T) {
 
 		gqlErrList := ValidateSchema(doc)
 		if gqlErrList == nil {
-			t.Errorf("Invalid schema passed tests.")
-		}
-
-		AddScalars(doc)
-		AddDirectives(doc)
-
-		_, gqlerr = validator.ValidateSchemaDocument(doc)
-		if gqlerr != nil {
-			t.Errorf("Unable to validate schema for " + fileName + " " + gqlerr.Message)
-			continue
+			t.Errorf("Invalid schema invalidschema" + strconv.Itoa(i+1) + ".txt passed tests.")
 		}
 	}
 }
